@@ -15,7 +15,14 @@ Two separate conda envs by design:
 - `P-ALIGN` (python 3.10) — runs everything in `src/`. Key pins: torch 2.8.0, vllm 0.11.0, transformers 4.57.1, math-verify 0.8.0.
 - `llama_factory` — SFT training only, via an external [LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory) checkout. Training is *not* implemented in this repo.
 
-`requirements.txt` is a **conda export** (`name=version=build` lines, `# platform: linux-64` header), not a pip requirements file. The README's `pip install -r requirements.txt --force-reinstall --no-deps --no-cache-dir` works only because `--no-deps` tolerates the format; prefer `conda create --name <env> --file requirements.txt` on linux-64. Note `oat_math_grader` (imported by `src/evaluation.py`) is **not** in it and must be installed separately.
+`requirements.txt` is a `conda list --export` dump (`name=version=build` lines, `# platform: linux-64` header). It is **not installable as written by either tool**:
+
+- `conda create --file requirements.txt` → `PackagesNotFoundError`. 145 of the 174 lines end in `=pypi_0`, meaning they were pip-installed and have no conda-channel equivalent.
+- `pip install -r requirements.txt` → `InvalidRequirement`. pip needs `name==version`; a single `=` is not a valid specifier operator, and `--no-deps` does not change parsing. The README's install command is therefore broken.
+
+Only 29 lines are real conda packages, and they are all base system libs (libgcc, openssl, python 3.10.18). So the working recipe is a bare env plus the converted pip list — `scripts/setup_env.sh` does this, filtering `=pypi_0` lines and rewriting `=` to `==`.
+
+`deepspeed`, `peft`, and `oat_math_grader` are used by the code but absent from `requirements.txt`; `setup_env.sh` installs them too.
 
 ## Pipeline
 
