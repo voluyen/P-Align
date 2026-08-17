@@ -40,7 +40,8 @@ PY_BIN="${PY_BIN:-$(command -v python || command -v python3 || true)}"
 
 export CUDA_VISIBLE_DEVICES="${GPU_ID}"
 export PALIGN_MODEL="${MODEL_PATH}"
-export PALIGN_SLEEP="${PALIGN_SLEEP:-0}"      # 0 = bỏ sleep vô ích của model local
+export PALIGN_GPU_UTIL="${PALIGN_GPU_UTIL:-0.85}"   # phần VRAM vLLM được dùng
+export PALIGN_CHUNK="${PALIGN_CHUNK:-64}"           # số mẫu chạy song song mỗi vòng
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # giảm phân mảnh VRAM
 
@@ -192,7 +193,7 @@ echo "  thư mục ra    : ${WORK_DIR}"
 # --------------------------- GIAI ĐOẠN 1 -------------------------------------
 if want_stage 1; then
     if ! resumable_stage "${TRUNCATED}" "${RAW_DATA}" "1"; then
-        banner "Giai đoạn 1/3 — Prefix truncation (chậm nhất, tính bằng giờ)"
+        banner "Giai đoạn 1/3 — Prefix truncation (vLLM, batch theo vòng)"
         require_free_gpu
         PALIGN_INPUT="${RAW_DATA}" PALIGN_OUTPUT="${TRUNCATED}" \
             "${PY_BIN}" src/binary_search.py 2>&1 | tee -a output/log/prefix.log
