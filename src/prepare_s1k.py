@@ -17,8 +17,12 @@ Về cột `solution`: nó KHÔNG phải đáp án cuối mà là lời giải �
     - đáp án số ngắn        "128", "109", "167.0"      -> dùng nguyên
     - lời giải dài kết \\boxed{...}                     -> trích trong hộp
     - bài chứng minh kết \\blacksquare                  -> KHÔNG có đáp án cuối
-Dạng thứ ba không thể lọc bằng Eq.9 (Ans(y)=a* không xác định) nên mặc định bị
-loại. Dùng --keep-unextractable nếu bạn muốn giữ và tự xử lý.
+
+Dạng thứ ba VẪN ĐƯỢC GIỮ. Đối chiếu với dữ liệu tác giả công bố
+(qizheyanger/P-ALIGN, 966 dòng) cho thấy các bài chứng minh đều nằm trong tập
+huấn luyện cuối, nên không được loại ở đây. Chúng chỉ có answer rỗng; giai đoạn
+3 sẽ giữ chúng nếu continuation có \\boxed{}. Dùng --drop-unextractable nếu bạn
+muốn theo đúng câu chữ Eq.9 và bỏ hẳn.
 """
 
 import argparse
@@ -88,9 +92,9 @@ def main():
                    help="chỉ lấy N dòng đầu, để chạy thử cả pipeline cho nhanh")
     p.add_argument("--max-short", type=int, default=32,
                    help="solution ngắn hơn ngần này (và 1 dòng) được coi là đáp án")
-    p.add_argument("--keep-unextractable", action="store_true",
-                   help="giữ cả dòng không trích được đáp án (answer rỗng). "
-                        "Cảnh báo: giai đoạn 3 sẽ loại sạch chúng.")
+    p.add_argument("--drop-unextractable", action="store_true",
+                   help="bỏ hẳn các dòng không trích được đáp án (bài chứng minh). "
+                        "Mặc định GIỮ, vì dữ liệu tác giả công bố cũng giữ chúng.")
     args = p.parse_args()
 
     print(f"📥 Đang đọc {args.repo} (split={args.split})...")
@@ -110,7 +114,7 @@ def main():
 
         answer, src = extract_answer(item.get("solution"), args.max_short)
         src_count[src] += 1
-        if answer is None and not args.keep_unextractable:
+        if answer is None and args.drop_unextractable:
             continue
 
         rows.append({
@@ -133,7 +137,7 @@ def main():
     print(f"answer lấy từ \\boxed{{}}       : {src_count['boxed']}")
     print(f"answer lấy từ solution ngắn   : {src_count['short']}")
     print(f"KHÔNG trích được (chứng minh) : {src_count['none']}"
-          f"{'  (đã giữ lại)' if args.keep_unextractable else '  (đã loại)'}")
+          f"{'  (đã loại)' if args.drop_unextractable else '  (đã GIỮ, answer rỗng)'}")
     print(f"ghi ra                        : {len(rows)} dòng -> {args.output}")
 
     if rows:
@@ -141,11 +145,11 @@ def main():
         print(f"độ dài Long-CoT (ký tự)       : p50={lens[len(lens)//2]}  "
               f"p95={lens[int(len(lens)*0.95)]}  max={lens[-1]}")
 
-    if src_count["none"]:
+    if src_count["none"] and not args.drop_unextractable:
         pct = src_count["none"] / max(total, 1) * 100
-        print(f"\n⚠️  {pct:.1f}% là bài chứng minh, không có đáp án cuối để so khớp.")
-        print("   Đây là đặc tính của s1K-1.1 (trộn thi đấu + chứng minh), không phải lỗi.")
-        print("   Retention ở giai đoạn 3 vì thế sẽ thấp hơn 97-99% của Table 7.")
+        print(f"\nℹ️  {pct:.1f}% là bài chứng minh (answer rỗng, không so khớp được).")
+        print("   Đã giữ lại: dữ liệu tác giả công bố cũng bao gồm chúng.")
+        print("   Giai đoạn 3 sẽ giữ nếu continuation có \\boxed{}, dùng --strict-eq9 để bỏ.")
 
     if len(rows) == 0:
         raise SystemExit("❌ Không ghi được dòng nào.")

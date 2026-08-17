@@ -1,13 +1,20 @@
 """Dataset + collator for P-ALIGN SFT.
 
+Reads the alpaca-format D_align written by build_align_dataset.py:
+
+    {"instruction": "Please reason step by step, ...",
+     "input":       "<the question>",
+     "output":      "<Begin_of_Prefix>...<End_of_Prefix><continuation>"}
+
+The user turn is `instruction + "\n" + input`, which is how LLaMA-Factory
+joins the two alpaca fields -- worth keeping identical, since the authors
+trained through LLaMA-Factory.
+
 Loss follows the paper's Eq. 2: negative log-likelihood over the supervision
-target only. The prompt (Instruct_QA applied to the question) is masked out with
--100 so no gradient flows through it.
+target only. The prompt is masked with -100 so no gradient flows through it.
 
-    input_ids = [chat-templated prompt] + [target] + [eos]
-    labels    = [-100 ... -100]         + [target] + [eos]
-
-where target = <Begin_of_prefix>R~<End_of_prefix>y, built by build_align_dataset.py.
+    input_ids = [chat-templated prompt] + [output] + [eos]
+    labels    = [-100 ... -100]         + [output] + [eos]
 """
 
 import json
@@ -30,12 +37,17 @@ class AlignSFTDataset(Dataset):
                 n_total += 1
                 row = json.loads(line)
 
-                prompt_ids = self._encode_prompt(row["prompt"])
+                # alpaca: LLaMA-Factory nối instruction và input bằng "\n"
+                query = row["instruction"]
+                if row.get("input", "").strip():
+                    query = f"{query}\n{row['input']}"
+
+                prompt_ids = self._encode_prompt(query)
                 if len(prompt_ids) > max_prompt_length:
                     prompt_ids = prompt_ids[:max_prompt_length]
                     n_prompt_trunc += 1
 
-                target_ids = self.tok(row["target"], add_special_tokens=False)["input_ids"]
+                target_ids = self.tok(row["output"], add_special_tokens=False)["input_ids"]
                 if self.tok.eos_token_id is not None:
                     target_ids = target_ids + [self.tok.eos_token_id]
 
