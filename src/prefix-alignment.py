@@ -54,6 +54,8 @@ def process_data(json_filename, file_name, llm, batch_size, tokenizer, sampling_
     total_batches = (len(data) + batch_size - 1) // batch_size
     print(f"Total {len(data)} samples, batch_size={batch_size}, total_batches={total_batches}")
 
+    n_written, n_failed, last_err = 0, 0, None
+
     # 使用 append 模式写入
     with open(file_name, "a", encoding="utf-8") as file:
         for batch_idx in tqdm(range(total_batches), total=total_batches, desc="Generating"):
@@ -78,6 +80,8 @@ def process_data(json_filename, file_name, llm, batch_size, tokenizer, sampling_
             try:
                 outputs = llm.generate(texts, sampling_params)
             except Exception as e:
+                n_failed += 1
+                last_err = e
                 print(f"[Error] Batch {batch_idx} generation failed: {e}")
                 continue
 
@@ -87,13 +91,25 @@ def process_data(json_filename, file_name, llm, batch_size, tokenizer, sampling_
                 item['output'] = result_text
                 json_line = json.dumps(item, ensure_ascii=False)
                 file.write(json_line + "\n")
+                n_written += 1
 
             file.flush()  # 确保每个 batch 都立即落盘
             os.fsync(file.fileno())
 
             print(f"[Saved] Batch {batch_idx+1}/{total_batches} ({len(batch_data)} items) written.")
 
-    print("✅ All data processed and saved successfully.")
+    # 之前这里无论如何都打印“成功”并以 0 退出。一旦每个 batch 都失败，就会留下
+    # 一个空文件，问题要到下一阶段才以“缺少文件”的形式冒出来，掩盖真正的原因。
+    if n_written == 0:
+        raise RuntimeError(
+            f"没有写出任何结果（{n_failed} 个 batch 生成失败）。"
+            f"最后一次错误：{last_err}"
+        )
+    if n_failed:
+        print(f"⚠️  {n_failed}/{total_batches} 个 batch 失败，仅写出 {n_written} 条。"
+              f" 最后一次错误：{last_err}")
+
+    print(f"✅ All data processed and saved successfully. ({n_written} 条)")
     
 def main():
     # 环境变量优先，缺省时回退到占位符，保持原来的手改路径用法。

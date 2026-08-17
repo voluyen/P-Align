@@ -98,6 +98,19 @@ require_free_gpu() {
     echo "   GPU ${GPU_ID}: ${free_mb} MiB trống"
 }
 
+# prefix-alignment.py bắt lỗi theo batch rồi continue, nên nó vẫn thoát mã 0
+# dù không ghi được dòng nào. Không kiểm tra ở đây thì lỗi chỉ lộ ra ở giai
+# đoạn sau dưới dạng "thiếu file", che mất nguyên nhân thật.
+must_have_output() {          # $1 = file, $2 = tên giai đoạn, $3 = log
+    if [[ ! -s "$1" ]]; then
+        echo
+        echo "❌ Giai đoạn $2 kết thúc nhưng $1 rỗng."
+        echo "   30 dòng cuối của $3:"
+        tail -30 "$3" 2>/dev/null | sed 's/^/     /'
+        exit 1
+    fi
+}
+
 # --------------------------- GIAI ĐOẠN 0 -------------------------------------
 if want_stage 0; then
     if done_already "${RAW_DATA}"; then
@@ -183,6 +196,7 @@ if want_stage 1; then
         require_free_gpu
         PALIGN_INPUT="${RAW_DATA}" PALIGN_OUTPUT="${TRUNCATED}" \
             "${PY_BIN}" src/binary_search.py 2>&1 | tee -a output/log/prefix.log
+        must_have_output "${TRUNCATED}" "1" "output/log/prefix.log"
         echo "→ ${TRUNCATED}: $(lines_of "${TRUNCATED}") dòng"
     fi
 fi
@@ -191,11 +205,13 @@ fi
 if want_stage 2; then
     if ! resumable_stage "${ALIGNED}" "${TRUNCATED}" "2"; then
         banner "Giai đoạn 2/3 — Prefix alignment (vLLM)"
-        [[ -s "${TRUNCATED}" ]] || { echo "❌ Thiếu ${TRUNCATED}, chạy giai đoạn 1 trước."; exit 1; }
+        [[ -f "${TRUNCATED}" ]] || { echo "❌ Chưa có ${TRUNCATED}. Chạy giai đoạn 1 trước."; exit 1; }
+        [[ -s "${TRUNCATED}" ]] || { echo "❌ ${TRUNCATED} tồn tại nhưng RỖNG — giai đoạn 1 đã chạy mà không ra kết quả."; exit 1; }
         require_free_gpu
         # Script này tự resume theo 'question' nên an toàn khi chạy lại trên file dở.
         PALIGN_INPUT="${TRUNCATED}" PALIGN_OUTPUT="${ALIGNED}" \
             "${PY_BIN}" src/prefix-alignment.py 2>&1 | tee -a output/log/prefix-alignment.log
+        must_have_output "${ALIGNED}" "2" "output/log/prefix-alignment.log"
         echo "→ ${ALIGNED}: $(lines_of "${ALIGNED}") dòng"
     fi
 fi
@@ -203,7 +219,9 @@ fi
 # --------------------------- GIAI ĐOẠN 3 -------------------------------------
 if want_stage 3; then
     banner "Giai đoạn 3/3 — Lọc Eq.9 + ghép supervision signal"
-    [[ -s "${ALIGNED}" ]] || { echo "❌ Thiếu ${ALIGNED}, chạy giai đoạn 2 trước."; exit 1; }
+    [[ -f "${ALIGNED}" ]] || { echo "❌ Chưa có ${ALIGNED}. Chạy giai đoạn 2 trước."; exit 1; }
+    [[ -s "${ALIGNED}" ]] || { echo "❌ ${ALIGNED} tồn tại nhưng RỖNG — giai đoạn 2 đã chạy mà mọi batch đều lỗi.
+   Xem: tail -40 output/log/prefix-alignment.log"; exit 1; }
     "${PY_BIN}" src/build_align_dataset.py \
         --input "${ALIGNED}" \
         --output "${D_ALIGN}" \
