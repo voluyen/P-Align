@@ -17,7 +17,7 @@ def process_data(json_filename, file_name, llm, batch_size, tokenizer, sampling_
     # --- 读取输入数据 ---
     with jsonlines.open(json_filename) as infile:
         data = []
-        for item in infile:
+        for idx, item in enumerate(infile):
             question = item['question']
             sufficient_reasoning = item['sufficient_reasoning']
 
@@ -28,8 +28,12 @@ def process_data(json_filename, file_name, llm, batch_size, tokenizer, sampling_
                 f"*Prefix*:{sufficient_reasoning}"
             )
 
+            # 必须透传 answer：下游 build_align_dataset.py 依赖它做
+            # 论文 Eq.9 的正确性过滤 Ans(y^i) == a_*^i
             data.append({
+                'id': item.get('id', idx),
                 'question': question,
+                'answer': item.get('answer', ''),
                 'sufficient_reasoning': sufficient_reasoning,
                 'prompt': prompt,
             })
@@ -92,9 +96,10 @@ def process_data(json_filename, file_name, llm, batch_size, tokenizer, sampling_
     print("✅ All data processed and saved successfully.")
     
 def main():
-    model="your model path"
-    json_filename = "input file path"
-    file_name = "output file path"
+    # 环境变量优先，缺省时回退到占位符，保持原来的手改路径用法。
+    model = os.environ.get("PALIGN_MODEL", "your model path")
+    json_filename = os.environ.get("PALIGN_INPUT", "input file path")
+    file_name = os.environ.get("PALIGN_OUTPUT", "output file path")
     tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
     sampling_params = SamplingParams(n=1, temperature=0.6, top_p=0.9, repetition_penalty=1.05, max_tokens=32768)
     llm = LLM(model=model, gpu_memory_utilization=0.8, max_model_len=32768, trust_remote_code=True, tensor_parallel_size=1)

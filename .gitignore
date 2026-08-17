@@ -1,1 +1,18 @@
 .DS_Store
+
+# Bài báo gốc — không phân phối lại trong repo này
+P-Align.pdf
+
+# Log và checkpoint sinh ra khi chạy
+output/
+
+# Dữ liệu trung gian của pipeline (có thể vài GB)
+data/processed/
+data/raw/*.jsonl
+data/raw/*.parquet
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/

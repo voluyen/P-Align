@@ -1,5 +1,6 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import json
+import os
 import time
 from tqdm import tqdm
 import torch
@@ -8,7 +9,8 @@ import torch
 # =====================
 # Model Initialization
 # =====================
-model_name = "Path to your model"
+# 环境变量优先，缺省时回退到占位符，保持原来的手改路径用法。
+model_name = os.environ.get("PALIGN_MODEL", "Path to your model")
 
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
@@ -107,13 +109,17 @@ Partial reasoning:
 # =====================
 # Binary Search Prefix Finder
 # =====================
-def find_minimal_sufficient_prefix(question, sentences, sleep_sec=0.5):
+def find_minimal_sufficient_prefix(question, sentences, sleep_sec=None):
     """
         sufficient_reasoning (str)
         prefix_len (int)
         is_sufficient (bool)
         best_response (str)
     """
+
+    # 本地模型不需要限速，PALIGN_SLEEP=0 可省掉约 1 小时纯等待（1000 条 × ~7 轮）
+    if sleep_sec is None:
+        sleep_sec = float(os.environ.get("PALIGN_SLEEP", "0.5"))
 
     total = len(sentences)
     left, right = 1, total
@@ -218,8 +224,8 @@ def process_jsonl(input_file, output_file):
 # Entry Point
 # =====================
 if __name__ == "__main__":
-    input_file = "Path to your input jsonl file"
-    output_file = "Path to your output jsonl file"
+    input_file = os.environ.get("PALIGN_INPUT", "Path to your input jsonl file")
+    output_file = os.environ.get("PALIGN_OUTPUT", "Path to your output jsonl file")
 
 
 
