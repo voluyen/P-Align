@@ -14,11 +14,23 @@ MODEL_PATH="${MODEL_PATH:-Qwen/Qwen3-4B}"  # phải trùng model dùng ở Prepa
 DATA_PATH="${BASE_PATH}/data/processed/d_align.jsonl"
 SAVE_PATH="${BASE_PATH}/output/ckpt/p-align"
 
-export CUDA_VISIBLE_DEVICES="0"
+GPU_ID="${GPU_ID:-0}"                      # GPU_ID=1 bash scripts/train_sft.sh
+export CUDA_VISIBLE_DEVICES="${GPU_ID}"
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 mkdir -p output/log "${SAVE_PATH}"
+
+# GPU phải trống, nếu không sẽ OOM sau khi đã nạp xong dữ liệu.
+FREE_MB=$(nvidia-smi --id="${GPU_ID}" --query-gpu=memory.free \
+          --format=csv,noheader,nounits 2>/dev/null || echo 0)
+if [[ "${FREE_MB}" -lt "${MIN_FREE_MB:-14000}" ]]; then
+    echo "❌ GPU ${GPU_ID} chỉ còn ${FREE_MB} MiB trống. Tiến trình đang giữ VRAM:"
+    nvidia-smi --query-compute-apps=pid,used_memory,process_name --format=csv 2>/dev/null | sed 's/^/     /'
+    exit 1
+fi
+echo "GPU ${GPU_ID}: ${FREE_MB} MiB trống"
 
 # ---- LoRA (mặc định, bám sát paper: lr 5e-5, 3 epochs) ----
 DS_CONFIG="${BASE_PATH}/configs/deepspeed/ds_zero2.json"
