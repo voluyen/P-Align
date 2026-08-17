@@ -42,6 +42,10 @@ export CUDA_VISIBLE_DEVICES="${GPU_ID}"
 export PALIGN_MODEL="${MODEL_PATH}"
 export PALIGN_SLEEP="${PALIGN_SLEEP:-0}"      # 0 = bỏ sleep vô ích của model local
 export TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # giảm phân mảnh VRAM
+
+# Bao nhiêu MiB trống mới đủ nạp student model (Qwen3-4B bf16 ~8GB + activation)
+MIN_FREE_MB="${MIN_FREE_MB:-12000}"
 
 mkdir -p "${WORK_DIR}" output/log
 
@@ -56,6 +60,42 @@ done_already() {
 
 want_stage() {
     [[ "${STAGE}" == "all" || "${STAGE}" == "$1" ]]
+}
+
+lines_of() { [[ -f "$1" ]] && wc -l < "$1" | tr -d ' ' || echo 0; }
+
+# Giai đoạn 1 và 2 đều chạy tiếp được từ file dở, nên chỉ coi là xong khi số
+# dòng ra đã bằng số dòng vào. Nếu chỉ kiểm tra "khác rỗng" thì một lần crash
+# giữa chừng sẽ bị hiểu nhầm là đã hoàn tất, và pipeline đi tiếp với dữ liệu thiếu.
+resumable_stage() {           # $1 = file ra, $2 = file vào, $3 = tên giai đoạn
+    local n_out n_in
+    n_out=$(lines_of "$1"); n_in=$(lines_of "$2")
+    if [[ "${FORCE}" == "1" ]]; then
+        rm -f "$1"; return 1
+    fi
+    if [[ "${n_out}" -gt 0 && "${n_out}" -ge "${n_in}" ]]; then
+        echo; echo "⏭  Bỏ qua giai đoạn $3: ${n_out}/${n_in} dòng, đã xong."
+        return 0
+    fi
+    [[ "${n_out}" -gt 0 ]] && echo "↻  Giai đoạn $3 chạy tiếp từ ${n_out}/${n_in} dòng."
+    return 1
+}
+
+# GPU phải thực sự trống. Đây là lỗi hay gặp nhất: vLLM của lần chạy trước còn
+# giữ ~80% VRAM, tiến trình mới chỉ xin được vài GB rồi OOM.
+require_free_gpu() {
+    local free_mb
+    free_mb=$(nvidia-smi --id="${GPU_ID}" --query-gpu=memory.free \
+              --format=csv,noheader,nounits 2>/dev/null || echo 0)
+    if [[ "${free_mb}" -lt "${MIN_FREE_MB}" ]]; then
+        echo "❌ GPU ${GPU_ID} chỉ còn ${free_mb} MiB trống (cần ≥ ${MIN_FREE_MB})."
+        echo "   Tiến trình đang giữ VRAM:"
+        nvidia-smi --query-compute-apps=pid,used_memory,process_name \
+                   --format=csv 2>/dev/null | sed 's/^/     /'
+        echo "   Kill tiến trình cũ rồi chạy lại, hoặc đổi GPU_ID=<id khác>."
+        exit 1
+    fi
+    echo "   GPU ${GPU_ID}: ${free_mb} MiB trống"
 }
 
 # --------------------------- GIAI ĐOẠN 0 -------------------------------------
@@ -138,30 +178,25 @@ echo "  thư mục ra    : ${WORK_DIR}"
 
 # --------------------------- GIAI ĐOẠN 1 -------------------------------------
 if want_stage 1; then
-    if done_already "${TRUNCATED}"; then
-        echo
-        echo "⏭  Bỏ qua giai đoạn 1: đã có ${TRUNCATED} ($(wc -l < "${TRUNCATED}") dòng)."
-        echo "   Dùng FORCE=1 để chạy lại (sẽ ghi đè)."
-    else
+    if ! resumable_stage "${TRUNCATED}" "${RAW_DATA}" "1"; then
         banner "Giai đoạn 1/3 — Prefix truncation (chậm nhất, tính bằng giờ)"
+        require_free_gpu
         PALIGN_INPUT="${RAW_DATA}" PALIGN_OUTPUT="${TRUNCATED}" \
-            "${PY_BIN}" src/binary_search.py 2>&1 | tee output/log/prefix.log
-        echo "→ ${TRUNCATED}: $(wc -l < "${TRUNCATED}") dòng"
+            "${PY_BIN}" src/binary_search.py 2>&1 | tee -a output/log/prefix.log
+        echo "→ ${TRUNCATED}: $(lines_of "${TRUNCATED}") dòng"
     fi
 fi
 
 # --------------------------- GIAI ĐOẠN 2 -------------------------------------
 if want_stage 2; then
-    if done_already "${ALIGNED}"; then
-        echo
-        echo "⏭  Bỏ qua giai đoạn 2: đã có ${ALIGNED} ($(wc -l < "${ALIGNED}") dòng)."
-    else
+    if ! resumable_stage "${ALIGNED}" "${TRUNCATED}" "2"; then
         banner "Giai đoạn 2/3 — Prefix alignment (vLLM)"
         [[ -s "${TRUNCATED}" ]] || { echo "❌ Thiếu ${TRUNCATED}, chạy giai đoạn 1 trước."; exit 1; }
+        require_free_gpu
         # Script này tự resume theo 'question' nên an toàn khi chạy lại trên file dở.
         PALIGN_INPUT="${TRUNCATED}" PALIGN_OUTPUT="${ALIGNED}" \
-            "${PY_BIN}" src/prefix-alignment.py 2>&1 | tee output/log/prefix-alignment.log
-        echo "→ ${ALIGNED}: $(wc -l < "${ALIGNED}") dòng"
+            "${PY_BIN}" src/prefix-alignment.py 2>&1 | tee -a output/log/prefix-alignment.log
+        echo "→ ${ALIGNED}: $(lines_of "${ALIGNED}") dòng"
     fi
 fi
 

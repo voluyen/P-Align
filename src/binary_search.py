@@ -95,15 +95,30 @@ Partial reasoning:
 {reasoning_part}
 """
 
-    try:
-        response = chat(prompt, model)
-        is_sufficient = (
-            "[ENOUGH]" in response or response.strip() == "ENOUGH"
-        )
-        return response, is_sufficient
-    except Exception as e:
-        print(f"Model error: {e}")
-        return f"ERROR: {e}", False
+    last_err = None
+    for attempt in range(3):
+        try:
+            response = chat(prompt, model)
+            is_sufficient = (
+                "[ENOUGH]" in response or response.strip() == "ENOUGH"
+            )
+            return response, is_sufficient
+        except torch.cuda.OutOfMemoryError as e:
+            last_err = e
+            torch.cuda.empty_cache()
+            print(f"⚠️  显存不足，重试 {attempt + 1}/3 ...")
+            time.sleep(5)
+        except Exception as e:
+            last_err = e
+            print(f"⚠️  模型报错 {type(e).__name__}，重试 {attempt + 1}/3 ...")
+            time.sleep(5)
+
+    # 绝不能把报错当成 NOT_ENOUGH。那会让二分查找一路向右、best_idx=None、
+    # 回退成完整推理，于是 prefix_ratio 全变 1.0——数据看不出坏，但方法已经失效。
+    raise RuntimeError(
+        f"连续 3 次调用模型失败，终止以免产出垃圾数据。最后一次错误：{last_err}\n"
+        "  显存不足时请先确认 GPU 没有被别的进程占用：nvidia-smi"
+    ) from last_err
 
 
 # =====================
@@ -180,7 +195,18 @@ def find_minimal_sufficient_prefix(question, sentences, sleep_sec=None):
 # =========================
 
 def process_jsonl(input_file, output_file):
-    open(output_file, "w", encoding="utf-8").close()
+    # 断点续跑：不再清空输出文件，改为跳过已经处理过的题目。
+    # 这一阶段动辄跑几个小时，中途挂掉不该从头再来。
+    done = set()
+    if os.path.exists(output_file):
+        with open(output_file, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    done.add(json.loads(line)["question"])
+                except Exception:
+                    continue
+        if done:
+            print(f"[Resume] 已有 {len(done)} 条结果，将跳过这些题目。")
 
     with open(input_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
@@ -191,6 +217,9 @@ def process_jsonl(input_file, output_file):
         full_reasoning = data.get("Long-CoT", "")
 
         if not question or not full_reasoning:
+            continue
+
+        if question in done:
             continue
 
         sentences = split_sentences(full_reasoning)
